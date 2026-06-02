@@ -4,17 +4,17 @@ import signal
 import socket
 import argparse
 from nicegui import ui, app
-from broh5.lib.interactions import GuiInteraction
-from broh5 import __version__
+from ifcview.lib.interactions import GuiInteraction
+from ifcview import __version__
 
 display_msg = """
 ===============================================================================
 
-Web-browser-based GUI (Graphical User Interface) software for viewing HDF files
+Browser-based viewer for imaging flow cytometry (IFC) data stored in HDF5
 
 ===============================================================================
 
-Type: broh5 to run the software
+Type: ifcview to run the software
 Exit the software by pressing: Ctrl + C
 
 ===============================================================================
@@ -77,7 +77,7 @@ def parse_args():
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__}")
     parser.add_argument("--port", type=int, default=8180,
-                        help="Specify the port to run broh5 on "
+                        help="Specify the port to run ifcview on "
                              "(default: 8180)")
     args = parser.parse_args()
     return args
@@ -94,23 +94,28 @@ def main():
         sys.exit(1)
     signal.signal(signal.SIGINT, signal_handler)  # Back-up shutdown
     try:
-        broh5_app = None
+        ifcview_app = None
 
         @ui.page('/')
         def main_page():
-            global broh5_app
-            broh5_app = GuiInteraction()
+            global ifcview_app
+            ifcview_app = GuiInteraction()
 
-        app.on_shutdown(lambda: handle_shutdown(broh5_app))
+        app.on_shutdown(lambda: handle_shutdown(ifcview_app))
         os.environ["NO_NETIFACES"] = "True"
         app.on_startup(
-            lambda: print("Access Broh5 at urls: {}".format(app.urls.union())))
-        ui.run(reload=False, title="Browser-based Hdf Viewer", port=args.port,
+            lambda: print("Access ifcview at urls: {}".format(
+                app.urls.union())))
+        ui.run(reload=False, title="IFC HDF5 Viewer", port=args.port,
                show_welcome_message=False)
     except Exception as error:
         print(f"An error occurred: {error}")
         sys.exit(0)
 
 
-if __name__ in {"__main__", "__mp_main__"}:
+# Only the parent launch (``__main__``) starts the server. ``run.cpu_bound``
+# spawns worker processes that re-import this module as ``__mp_main__``; those
+# must NOT re-enter main() (it would try to rebind the port and break the
+# process pool), so ``__mp_main__`` is deliberately excluded here.
+if __name__ == "__main__":
     main()

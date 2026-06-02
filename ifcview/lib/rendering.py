@@ -12,89 +12,82 @@ from pathlib import Path
 from typing import Optional, List
 from nicegui import ui
 from nicegui.events import GenericEventArguments
-import broh5.lib.utilities as util
+import ifcview.lib.utilities as util
 
 
 # ============================================================================
 #                   Global parameters for the GUI
 # ============================================================================
 
-MARKER_LIST = [",", ".", "o", "x"]
-CMAP_LIST = ["gray", "inferno", "afmhot", "viridis", "magma"]
-AXIS_LIST = [0, 1, 2]
+# First entry is the default (channel 1 / brightfield). Perceptually-uniform
+# sequential colormaps (viridis family) are used both as the dropdown choices
+# and for the per-channel auto-colormap (see util.channel_colormap).
+CMAP_LIST = ["gray", "viridis", "plasma", "inferno", "magma", "cividis"]
+# Dropdown options: matplotlib name -> capitalised label shown to the user.
+CMAP_OPTIONS = {name: name.capitalize() for name in CMAP_LIST}
 FONT_STYLE = "font-size: 105%; font-weight: bold"
-DISPLAY_TYPE = ["plot", "table"]
 UPDATE_RATE = 0.2  # second
+BROWSE_PAGE_SIZE = 10  # number of datasets listed per browse page
+MAX_BROWSE_PAGES = 5   # pages of cells scanned/cached per experiment (cap)
+# "Cells only" browse filter: keep events whose brightfield layer has enough
+# contrast (std/mean). Empty/noise events have a wide, sparse histogram and
+# thus low contrast; real cells show a concentrated bright/dark structure.
+CELL_FILTER_CHANNEL = 0  # layer used to judge "is a cell" (0 = brightfield)
+CELL_CONTRAST_THRESHOLD = 0.01  # min std/mean of that layer to count as a cell
+CELL_FILTER_SCAN_LIMIT = 20000  # max events probed per page when filtering
 RATIO = 0.65  # Ratio for adjusting size between image/plot and screen
 MAX_FIG_SIZE = [12.0, 9.0]
 MAX_PLOT_SIZE = [9.0, 7.0]
 INPUT_EXT = ["hdf", "nxs", "h5", "hdf5"]
-PLOT_COLOR = "blue"
 HEADER_COLOR = "#3874c8"
-HEADER_TITLE = "BROWSER-BASED HDF VIEWER"
+HEADER_TITLE = "IMAGING FLOW CYTOMETRY HDF5 VIEWER"
 LEFT_DRAWER_COLOR = "#d7e3f4"
 TREE_BGR_COLOR = "#f8f8ff"
-BOX_LINE_COLOR = "lime"
-BOX_LINE_WIDTH = 3
 
 
 class GuiRendering:
     """
-    A class to build the graphical user interface for an HDF viewer.
+    A class to build the graphical user interface for an HDF image viewer.
 
-    This class creates various UI elements like headers, buttons,
-    sliders, tables, and plots to facilitate user interaction with HDF data.
+    This class creates the UI elements (header, file picker, image plot,
+    contrast sliders, colormap selector, and an image-information tab) used
+    to view 2D image datasets stored in an HDF file.
 
     Attributes
     ----------
     fig_size : tuple
-        Dimensions for the figure in the UI.
+        Dimensions for the image figure in the UI.
     plot_size : tuple
         Dimensions for the histogram plot in the UI.
-    tree_container : UI column
-        Container for the HDF tree structure.
     select_file_button : UI button
         Button to trigger file selection.
+    experiment_select : UI select
+        Dropdown listing the top-level experiments of the opened file.
+    event_input : UI input
+        Field for entering the event id to look up.
+    channel_select : UI select
+        Dropdown of channel names (from the experiment's attributes) selecting
+        which layer of the (C, H, W) stack to display.
+    browse_container : UI list
+        Paginated list of dataset names for the selected experiment.
     file_path_display : UI label
         Label to display selected file path.
     hdf_key_display : UI label
         Label to display HDF key.
     hdf_value_display : UI label
         Label to display HDF value.
-    axis_list : UI select
-        Dropdown to select axis for slicing.
     cmap_list : UI select
-        Dropdown to select color map for plots.
-    enable_zoom : UI checkbox
-        Check-box to enable/disable image zoom.
-    zoom_list : UI select
-        Dropdown to select zooming ratio.
-    enable_profile :  UI checkbox
-        Check-box to enable/disable the intensity-profile plot
-    profile_list : UI select
-        Dropdown to select the direction of the intensity profile.
+        Dropdown to select color map for the image.
     save_image_button : UI button
         Button to save current image.
-    display_type : UI select
-        Dropdown to choose the display type (plot or table).
-    marker_list : UI select
-        Dropdown to select marker type for plots.
-    save_data_button : UI button
-        Button to save current data.
-    main_slider : UI slider
-        Slider to navigate through slices of 3D data.
-    main_table : UI table
-        Table to display data in tabular form.
     main_plot : UI matplotlib
-        Matplotlib element to display plots.
-    zoom_profile_plot : UI pyplot
-        Pyplot element to display zooming of an image or intensity-profile.
+        Matplotlib element to display the image.
     min_slider : UI slider
         Slider to adjust the minimum value for image contrast.
     max_slider : UI slider
         Slider to adjust the maximum value for image contrast.
     reset_button : UI button
-        Button to reset adjustments.
+        Button to reset contrast adjustments.
     histogram_plot : UI pyplot
         Pyplot element to display histogram of an image.
     image_info_table : UI table
@@ -116,25 +109,24 @@ class GuiRendering:
                          min(wid_size, MAX_FIG_SIZE[1]))
         self.plot_size = (min(hei_size, MAX_PLOT_SIZE[0]),
                           min(wid_size, MAX_PLOT_SIZE[1]))
-        self.tree_container = None
         self.select_file_button = None
+        self.lookup_panel = None
+        self.experiment_select = None
+        self.event_input = None
+        self.open_button = None
+        self.close_file_button = None
+        self.browse_panel = None
+        self.browse_info = None
+        self.browse_container = None
+        self.prev_button = None
+        self.next_button = None
         self.file_path_display = None
         self.hdf_key_display = None
         self.hdf_value_display = None
-        self.axis_list = None
+        self.channel_select = None
         self.cmap_list = None
-        self.enable_zoom = None
-        self.zoom_list = None
-        self.enable_profile = None
-        self.profile_list = None
         self.save_image_button = None
-        self.display_type = None
-        self.marker_list = None
-        self.save_data_button = None
-        self.main_slider = None
-        self.main_table = None
         self.main_plot = None
-        self.zoom_profile_plot = None
         self.min_slider = None
         self.max_slider = None
         self.reset_button = None
@@ -143,28 +135,54 @@ class GuiRendering:
         self.tab_one = None
         self.tab_two = None
         self.panel_tabs = None
+        self.loading_dialog = None
+        self.loading_label = None
         self.init_gui()
 
     def init_gui(self):
         """
         Initializes and constructs the various elements of the GUI.
 
-        This method sets up headers, drawers, rows, labels, buttons, sliders,
-        tables, and plots to create an interactive user interface.
+        This method sets up the header, drawer (HDF tree), the image plot,
+        contrast sliders, colormap selector, and the image-information tab.
         """
         # For the header
         with ui.header().style("background-color: " + HEADER_COLOR).classes(
                 "items-center justify-between"):
             ui.label(HEADER_TITLE).style(FONT_STYLE)
 
-        # For the left drawer, used to display a hdf tree.
+        # For the left drawer: file selection, image lookup, and browsing.
         with ui.left_drawer(fixed=True, bottom_corner=True).style(
                 "background-color: " + LEFT_DRAWER_COLOR):
-            with ui.row():
-                self.tree_container = ui.column()
-                with self.tree_container:
-                    self.select_file_button = ui.button(
-                        "Select file").props("icon=folder")
+            with ui.column().classes("w-full"):
+                self.select_file_button = ui.button(
+                    "Select file").props("icon=folder")
+
+                # Lookup panel: jump straight to an image by ids.
+                self.lookup_panel = ui.column().classes("w-full")
+                with self.lookup_panel:
+                    ui.label("Lookup image").style(FONT_STYLE)
+                    self.experiment_select = ui.select(
+                        [], label="Experiment").classes("w-full")
+                    self.event_input = ui.input("Event ID").classes("w-full")
+                    with ui.row().classes("w-full"):
+                        self.open_button = ui.button("Open").props(
+                            "icon=image")
+                        self.close_file_button = ui.button(
+                            "Close file").props("outline")
+                self.lookup_panel.set_visibility(False)
+
+                # Browse panel: page through the first datasets of a sample.
+                self.browse_panel = ui.column().classes("w-full")
+                with self.browse_panel:
+                    ui.label("Browse cells").style(FONT_STYLE)
+                    self.browse_info = ui.label("")
+                    self.browse_container = ui.list().props(
+                        "dense bordered").classes("w-full")
+                    with ui.row().classes("items-center"):
+                        self.prev_button = ui.button("Prev").props("outline")
+                        self.next_button = ui.button("Next").props("outline")
+                self.browse_panel.set_visibility(False)
 
         # Layout for the main page.
         with ui.column().classes("w-full no-wrap gap-1"):
@@ -181,65 +199,34 @@ class GuiRendering:
                     self.hdf_value_display = ui.label("")
             ui.separator()
 
-            # For ui-components used to interact with data.
+            # For ui-components used to interact with the image.
             with ui.row().classes("w-full justify-between items-center"):
-                # For ui-components used to interact with 3d data.
                 with ui.row().classes("items-center"):
-                    ui.label("Axis: ").style(FONT_STYLE)
-                    self.axis_list = ui.select(AXIS_LIST, value=AXIS_LIST[0])
+                    ui.label("Channel: ").style(FONT_STYLE)
+                    self.channel_select = ui.select(
+                        options={}, label=None).classes("w-56")
                 with ui.row().classes("items-center"):
                     ui.label("Color map: ").style(FONT_STYLE)
-                    self.cmap_list = ui.select(CMAP_LIST, value=CMAP_LIST[0])
-                with ui.row().classes("items-center"):
-                    self.enable_zoom = ui.checkbox('Zoom')
-                    self.zoom_list = ui.select(['2x', '4x', '8x'], value="2x")
-                with ui.row().classes("items-center"):
-                    self.enable_profile = ui.checkbox('Profile')
-                    self.profile_list = ui.select(['vertical', 'horizontal'],
-                                                  value='horizontal')
+                    self.cmap_list = ui.select(CMAP_OPTIONS, value=CMAP_LIST[0])
                 self.save_image_button = ui.button("Save image")
 
-                # For ui-components used to interact with 1d/2d data.
-                with ui.row().classes("items-center"):
-                    ui.label("Display: ").style(FONT_STYLE)
-                    self.display_type = ui.select(DISPLAY_TYPE,
-                                                  value=DISPLAY_TYPE[0])
-                with ui.row().classes("items-center"):
-                    ui.label("Marker: ").style(FONT_STYLE)
-                    self.marker_list = ui.select(MARKER_LIST,
-                                                 value=MARKER_LIST[0])
-                self.save_data_button = ui.button("Save data")
-
-            # Slider for slicing 3d dataset
-            with ui.row().classes("w-full items-center no-wrap"):
-                ui.label("Slice: ").style(FONT_STYLE)
-                self.main_slider = ui.slider(min=0, max=100, value=0).props(
-                    "label-always").on("update:model-value",
-                                       throttle=UPDATE_RATE,
-                                       leading_events=False)
-
-            # Tabs for data visualization and displaying image information
+            # Tabs for image visualization and image information
             tabs = ui.tabs().classes('w-full')
             with tabs:
-                self.tab_one = ui.tab('Data visualization').style(
+                self.tab_one = ui.tab('Image').style(
                     "background-color: " + TREE_BGR_COLOR)
                 self.tab_two = ui.tab('Image information').style(
                     "background-color: " + TREE_BGR_COLOR)
             self.panel_tabs = ui.tab_panels(tabs, value=self.tab_one).classes(
                 'w-full')
             with self.panel_tabs:
-                # Tab 1 for data visualization
+                # Tab 1 for displaying the image
                 with ui.tab_panel(self.tab_one):
-                    # For display data as an image, table, or plot
-                    self.main_table = ui.table(columns=[], rows=[],
-                                               row_key="Index")
                     with ui.row().classes("w-full justify-left items-center"):
                         self.main_plot = ui.matplotlib(figsize=self.fig_size,
                                                        dpi=self.dpi)
-                        self.zoom_profile_plot = ui.matplotlib(
-                            figsize=self.fig_size, dpi=self.dpi)
 
-                    # Sliders for adjust the contrast of an image.
+                    # Sliders for adjusting the contrast of an image.
                     with ui.row().classes(
                             "w-full justify-between no-wrap items-center"):
                         ui.label("Min: ").style(FONT_STYLE)
@@ -265,7 +252,20 @@ class GuiRendering:
                                                         ).classes("w-full")
                         self.image_info_table = ui.table(columns=[],
                                                          rows=[],
-                                                         row_key="name")
+                                                         row_key="information")
+
+        # Reusable modal "busy" overlay, built once here (at page-construction
+        # time) so it always belongs to this page's client. It can then be
+        # toggled reliably even from a deferred value-change handler -- creating
+        # a fresh ui.dialog() inside such a handler attaches it to whatever slot
+        # context happens to be current, which is why the scan previously ran
+        # with no visible buffer. It is shown via GuiInteraction.loading_overlay
+        # and never re-created; the label text is updated per use.
+        with ui.dialog().props("persistent") as self.loading_dialog, \
+                ui.card().classes("items-center gap-4 w-72").style(
+                    "background-color: " + LEFT_DRAWER_COLOR):
+            ui.spinner(size="lg")
+            self.loading_label = ui.label("").classes("text-center w-full")
 
 
 class FilePicker(ui.dialog):
@@ -320,10 +320,14 @@ class FilePicker(ui.dialog):
             self.grid = ui.aggrid(
                 {'columnDefs': [{'field': 'name', 'headerName': 'File'}],
                  'rowSelection': 'single'}, html_columns=[0]).classes(
-                'w-96').on('cellDoubleClicked', self.handle_double_click)
+                'w-96').on('cellClicked', self.handle_single_click).on(
+                'cellDoubleClicked', self.handle_double_click)
             with ui.row().classes('w-full justify-end'):
                 ui.button('Cancel', on_click=self.close).props('outline')
                 ui.button('Ok', on_click=self.handle_ok)
+        # Track the row picked by a single click so 'Ok' works without needing
+        # the aggrid selection round-trip (which a fresh update_grid would wipe).
+        self.selected_path = None
         self.update_grid()
 
     def check_extension(self, filename: str) -> bool:
@@ -373,39 +377,36 @@ class FilePicker(ui.dialog):
                 'path': str(self.path.parent), })
         self.grid.update()
 
+    def handle_single_click(self, e: GenericEventArguments) -> None:
+        """Remember the row a single click landed on (for the 'Ok' button)."""
+        self.selected_path = Path(e.args['data']['path'])
+
     def handle_double_click(self, e: GenericEventArguments) -> None:
+        """Open a folder, or pick a file, on double click."""
         self.path = Path(e.args['data']['path'])
         if self.path.is_dir():
+            self.selected_path = None
             self.update_grid()
-        else:
-            if self.path:
-                self.submit(str(self.path))
-            else:
-                return
+        elif self.path:
+            self.submit(str(self.path))
 
-    async def handle_ok(self):
-        try:
-            self.update_grid()
-            rows = await self.grid.get_selected_rows()
-            if rows:
-                fpath = [r['path'] for r in rows]
-                if fpath:
-                    selected_path = Path(fpath[0])
-                    if selected_path.suffix in {'.h5', '.hdf', '.nxs'}:
-                        self.submit(str(selected_path))
-                    else:
-                        ui.notify("Please select a file with the extension "
-                                  ".h5, .hdf, or .nxs!")
-                        return
-                else:
-                    ui.notify("No file path found in the selected rows")
-                    return
-            else:
-                ui.notify("No rows selected. Try double-clicking instead!")
-                return
-        except Exception as e:
-            ui.notify(f"An error occurred: {e}")
+    def handle_ok(self):
+        """Confirm the single-click selection: enter folders, submit files."""
+        selected = self.selected_path
+        if selected is None:
+            ui.notify("Select a file or folder first.")
             return
+        if selected.is_dir():
+            self.path = selected
+            self.selected_path = None
+            self.update_grid()
+            return
+        if self.check_extension(selected.name):
+            self.submit(str(selected))
+        else:
+            exts = ", ".join("." + e for e in (self.allowed_extensions or []))
+            ui.notify("Please select a file with the extension: "
+                      + (exts or "(any)") + "!")
 
 
 class FileSaver(ui.dialog):

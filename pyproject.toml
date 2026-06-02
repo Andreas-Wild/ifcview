@@ -1,0 +1,39 @@
+[project]
+name = "ifcview"
+version = "0.1.0"
+description = "Minimal browser-based HDF5 viewer for imaging flow cytometry data"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Andreas Wild", email = "andreaswild9@gmail.com" },
+]
+keywords = ["HDF5", "imaging flow cytometry", "IFC", "viewer", "NiceGUI"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy>=1.23",
+    "h5py>3.7",
+    "hdf5plugin",
+    "pillow",
+    "matplotlib",
+    "nicegui>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/andreaswild9/ifcview"
+
+[project.scripts]
+ifcview = "ifcview.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ifcview"]

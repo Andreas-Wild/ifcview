@@ -1,7 +1,0 @@
-# python>=3.8
-numpy>1.21
-h5py>3.7
-hdf5plugin
-pillow
-matplotlib
-nicegui>=3.0

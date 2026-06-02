@@ -58,5 +58,8 @@ venv.bak/
 # PyCharm
 .idea/
 
+# IFC data (large, generated/kept locally - not committed)
+*.h5
+
 # Local stuffs
 dev/
