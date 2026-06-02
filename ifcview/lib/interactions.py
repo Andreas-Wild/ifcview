@@ -52,6 +52,10 @@ class GuiInteraction(GuiRendering):
         self.next_button.on("click", self.browse_next)
         self.channel_select.on("update:model-value",
                                lambda e: self.on_channel_change())
+        # Arrow keys: left/right cycle through the browsed images, up/down
+        # cycle through the channel layers. The keyboard ignores typing in
+        # inputs/selects so the event-id field still works normally.
+        self.keyboard = ui.keyboard(on_key=self.handle_key)
         self.current_state, self.image, self.image_norm = None, None, None
         self.timer = ui.timer(re.UPDATE_RATE, lambda: self.show_data())
         self.selected_tab = 1
@@ -302,6 +306,48 @@ class GuiInteraction(GuiRendering):
                 < len(self.browse_cells):
             self.browse_page += 1
             self.render_browse_page()
+
+    def handle_key(self, e):
+        """Map arrow keys to image/channel cycling.
+
+        Left/Right step through the browsed cell images; Up/Down step through
+        the channel layers. Both wrap around.
+        """
+        if not e.action.keydown:
+            return
+        if e.key.arrow_left:
+            self.cycle_image(-1)
+        elif e.key.arrow_right:
+            self.cycle_image(1)
+        elif e.key.arrow_up:
+            self.cycle_channel(-1)
+        elif e.key.arrow_down:
+            self.cycle_channel(1)
+
+    def cycle_image(self, delta):
+        """Open the image ``delta`` steps away in the browsed cell list."""
+        cells = self.browse_cells
+        if not cells:
+            return
+        experiment = self.experiment_select.value
+        prefix = "{}/".format(experiment)
+        key = self.hdf_key_display.text
+        name = key[len(prefix):] if key.startswith(prefix) else ""
+        if name in cells:
+            idx = (cells.index(name) + delta) % len(cells)
+        else:
+            idx = 0
+        self.open_key("{}/{}".format(experiment, cells[idx]))
+
+    def cycle_channel(self, delta):
+        """Select the channel layer ``delta`` steps away (wraps around)."""
+        n = len(self.channel_labels)
+        if n == 0:
+            return
+        current = self.channel_select.value
+        idx = (int(current) + delta) % n if current is not None else 0
+        self.channel_select.set_value(idx)
+        self.on_channel_change()
 
     async def open_image(self):
         """Resolve and open an event by experiment / event id. The channel

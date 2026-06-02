@@ -6,14 +6,15 @@ Module for constructing GUI components:
 """
 
 import os
-import string
 import platform
+import string
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
+
 from nicegui import ui
 from nicegui.events import GenericEventArguments
-import ifcview.lib.utilities as util
 
+import ifcview.lib.utilities as util
 
 # ============================================================================
 #                   Global parameters for the GUI
@@ -28,7 +29,7 @@ CMAP_OPTIONS = {name: name.capitalize() for name in CMAP_LIST}
 FONT_STYLE = "font-size: 105%; font-weight: bold"
 UPDATE_RATE = 0.2  # second
 BROWSE_PAGE_SIZE = 10  # number of datasets listed per browse page
-MAX_BROWSE_PAGES = 5   # pages of cells scanned/cached per experiment (cap)
+MAX_BROWSE_PAGES = 5  # pages of cells scanned/cached per experiment (cap)
 # "Cells only" browse filter: keep events whose brightfield layer has enough
 # contrast (std/mean). Empty/noise events have a wide, sparse histogram and
 # thus low contrast; real cells show a concentrated bright/dark structure.
@@ -98,6 +99,7 @@ class GuiRendering:
     init_gui()
         Initializes and constructs the GUI elements.
     """
+
     def __init__(self):
         super().__init__()
         # Initial parameters
@@ -105,10 +107,11 @@ class GuiRendering:
         hei_size = RATIO * sc_width / dpi
         wid_size = RATIO * sc_height / dpi
         self.dpi = dpi
-        self.fig_size = (min(hei_size, MAX_FIG_SIZE[0]),
-                         min(wid_size, MAX_FIG_SIZE[1]))
-        self.plot_size = (min(hei_size, MAX_PLOT_SIZE[0]),
-                          min(wid_size, MAX_PLOT_SIZE[1]))
+        self.fig_size = (min(hei_size, MAX_FIG_SIZE[0]), min(wid_size, MAX_FIG_SIZE[1]))
+        self.plot_size = (
+            min(hei_size, MAX_PLOT_SIZE[0]),
+            min(wid_size, MAX_PLOT_SIZE[1]),
+        )
         self.select_file_button = None
         self.lookup_panel = None
         self.experiment_select = None
@@ -147,38 +150,43 @@ class GuiRendering:
         contrast sliders, colormap selector, and the image-information tab.
         """
         # For the header
-        with ui.header().style("background-color: " + HEADER_COLOR).classes(
-                "items-center justify-between"):
+        with (
+            ui.header()
+            .style("background-color: " + HEADER_COLOR)
+            .classes("items-center justify-between")
+        ):
             ui.label(HEADER_TITLE).style(FONT_STYLE)
 
         # For the left drawer: file selection, image lookup, and browsing.
         with ui.left_drawer(fixed=True, bottom_corner=True).style(
-                "background-color: " + LEFT_DRAWER_COLOR):
+            "background-color: " + LEFT_DRAWER_COLOR
+        ):
             with ui.column().classes("w-full"):
-                self.select_file_button = ui.button(
-                    "Select file").props("icon=folder")
+                self.select_file_button = ui.button("Select file").props("icon=folder")
 
                 # Lookup panel: jump straight to an image by ids.
                 self.lookup_panel = ui.column().classes("w-full")
                 with self.lookup_panel:
                     ui.label("Lookup image").style(FONT_STYLE)
-                    self.experiment_select = ui.select(
-                        [], label="Experiment").classes("w-full")
+                    self.experiment_select = ui.select([], label="Experiment").classes(
+                        "w-full"
+                    )
                     self.event_input = ui.input("Event ID").classes("w-full")
                     with ui.row().classes("w-full"):
-                        self.open_button = ui.button("Open").props(
-                            "icon=image")
-                        self.close_file_button = ui.button(
-                            "Close file").props("outline")
+                        self.open_button = ui.button("Open").props("icon=image")
+                        self.close_file_button = ui.button("Close file").props(
+                            "outline"
+                        )
                 self.lookup_panel.set_visibility(False)
 
                 # Browse panel: page through the first datasets of a sample.
                 self.browse_panel = ui.column().classes("w-full")
                 with self.browse_panel:
-                    ui.label("Browse cells").style(FONT_STYLE)
+                    ui.label("Quick Cell View").style(FONT_STYLE)
                     self.browse_info = ui.label("")
-                    self.browse_container = ui.list().props(
-                        "dense bordered").classes("w-full")
+                    self.browse_container = (
+                        ui.list().props("dense bordered").classes("w-full")
+                    )
                     with ui.row().classes("items-center"):
                         self.prev_button = ui.button("Prev").props("outline")
                         self.next_button = ui.button("Next").props("outline")
@@ -203,56 +211,70 @@ class GuiRendering:
             with ui.row().classes("w-full justify-between items-center"):
                 with ui.row().classes("items-center"):
                     ui.label("Channel: ").style(FONT_STYLE)
-                    self.channel_select = ui.select(
-                        options={}, label=None).classes("w-56")
+                    self.channel_select = ui.select(options={}, label=None).classes(
+                        "w-56"
+                    )
                 with ui.row().classes("items-center"):
                     ui.label("Color map: ").style(FONT_STYLE)
                     self.cmap_list = ui.select(CMAP_OPTIONS, value=CMAP_LIST[0])
                 self.save_image_button = ui.button("Save image")
 
             # Tabs for image visualization and image information
-            tabs = ui.tabs().classes('w-full')
+            tabs = ui.tabs().classes("w-full")
             with tabs:
-                self.tab_one = ui.tab('Image').style(
-                    "background-color: " + TREE_BGR_COLOR)
-                self.tab_two = ui.tab('Image information').style(
-                    "background-color: " + TREE_BGR_COLOR)
-            self.panel_tabs = ui.tab_panels(tabs, value=self.tab_one).classes(
-                'w-full')
+                self.tab_one = ui.tab("Image").style(
+                    "background-color: " + TREE_BGR_COLOR
+                )
+                self.tab_two = ui.tab("Image information").style(
+                    "background-color: " + TREE_BGR_COLOR
+                )
+            self.panel_tabs = ui.tab_panels(tabs, value=self.tab_one).classes("w-full")
             with self.panel_tabs:
                 # Tab 1 for displaying the image
                 with ui.tab_panel(self.tab_one):
                     with ui.row().classes("w-full justify-left items-center"):
-                        self.main_plot = ui.matplotlib(figsize=self.fig_size,
-                                                       dpi=self.dpi)
+                        self.main_plot = ui.matplotlib(
+                            figsize=self.fig_size, dpi=self.dpi
+                        )
 
                     # Sliders for adjusting the contrast of an image.
                     with ui.row().classes(
-                            "w-full justify-between no-wrap items-center"):
+                        "w-full justify-between no-wrap items-center"
+                    ):
                         ui.label("Min: ").style(FONT_STYLE)
-                        self.min_slider = ui.slider(min=0, max=254,
-                                                    value=0).props(
-                            "label-always").on("update:model-value",
-                                               throttle=UPDATE_RATE,
-                                               leading_events=False)
+                        self.min_slider = (
+                            ui.slider(min=0, max=254, value=0)
+                            .props("label-always")
+                            .on(
+                                "update:model-value",
+                                throttle=UPDATE_RATE,
+                                leading_events=False,
+                            )
+                        )
 
                         ui.label("Max: ").style(FONT_STYLE)
-                        self.max_slider = ui.slider(min=1, max=255,
-                                                    value=255).props(
-                            "label-always").on("update:model-value",
-                                               throttle=UPDATE_RATE,
-                                               leading_events=False)
+                        self.max_slider = (
+                            ui.slider(min=1, max=255, value=255)
+                            .props("label-always")
+                            .on(
+                                "update:model-value",
+                                throttle=UPDATE_RATE,
+                                leading_events=False,
+                            )
+                        )
                         self.reset_button = ui.button("Reset")
                 # Tab 2 for showing image information
                 with ui.tab_panel(self.tab_two):
                     with ui.row().classes(
-                            "w-full justify-between no-wrap items-center"):
-                        self.histogram_plot = ui.pyplot(figsize=self.plot_size,
-                                                        close=False,
-                                                        ).classes("w-full")
-                        self.image_info_table = ui.table(columns=[],
-                                                         rows=[],
-                                                         row_key="information")
+                        "w-full justify-between no-wrap items-center"
+                    ):
+                        self.histogram_plot = ui.pyplot(
+                            figsize=self.plot_size,
+                            close=False,
+                        ).classes("w-full")
+                        self.image_info_table = ui.table(
+                            columns=[], rows=[], row_key="information"
+                        )
 
         # Reusable modal "busy" overlay, built once here (at page-construction
         # time) so it always belongs to this page's client. It can then be
@@ -261,9 +283,12 @@ class GuiRendering:
         # context happens to be current, which is why the scan previously ran
         # with no visible buffer. It is shown via GuiInteraction.loading_overlay
         # and never re-created; the label text is updated per use.
-        with ui.dialog().props("persistent") as self.loading_dialog, \
-                ui.card().classes("items-center gap-4 w-72").style(
-                    "background-color: " + LEFT_DRAWER_COLOR):
+        with (
+            ui.dialog().props("persistent") as self.loading_dialog,
+            ui.card()
+            .classes("items-center gap-4 w-72")
+            .style("background-color: " + LEFT_DRAWER_COLOR),
+        ):
             ui.spinner(size="lg")
             self.loading_label = ui.label("").classes("text-center w-full")
 
@@ -301,10 +326,15 @@ class FilePicker(ui.dialog):
     handle_ok()
         Handle the OK button, click to submit the selected file path.
     """
-    def __init__(self, directory: str, *,
-                 upper_limit: Optional[str] = None,
-                 show_hidden_files: bool = False,
-                 allowed_extensions: Optional[List[str]] = None) -> None:
+
+    def __init__(
+        self,
+        directory: str,
+        *,
+        upper_limit: Optional[str] = None,
+        show_hidden_files: bool = False,
+        allowed_extensions: Optional[List[str]] = None,
+    ) -> None:
         super().__init__()
         self.show_hidden_files = show_hidden_files
         self.allowed_extensions = allowed_extensions
@@ -314,17 +344,25 @@ class FilePicker(ui.dialog):
             self.upper_limit = None
         else:
             self.upper_limit = Path(
-                directory if upper_limit is ... else upper_limit).expanduser()
+                directory if upper_limit is ... else upper_limit
+            ).expanduser()
         with self, ui.card():
             self.add_drives_toggle()
-            self.grid = ui.aggrid(
-                {'columnDefs': [{'field': 'name', 'headerName': 'File'}],
-                 'rowSelection': 'single'}, html_columns=[0]).classes(
-                'w-96').on('cellClicked', self.handle_single_click).on(
-                'cellDoubleClicked', self.handle_double_click)
-            with ui.row().classes('w-full justify-end'):
-                ui.button('Cancel', on_click=self.close).props('outline')
-                ui.button('Ok', on_click=self.handle_ok)
+            self.grid = (
+                ui.aggrid(
+                    {
+                        "columnDefs": [{"field": "name", "headerName": "File"}],
+                        "rowSelection": "single",
+                    },
+                    html_columns=[0],
+                )
+                .classes("w-96")
+                .on("cellClicked", self.handle_single_click)
+                .on("cellDoubleClicked", self.handle_double_click)
+            )
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Cancel", on_click=self.close).props("outline")
+                ui.button("Ok", on_click=self.handle_ok)
         # Track the row picked by a single click so 'Ok' works without needing
         # the aggrid selection round-trip (which a fresh update_grid would wipe).
         self.selected_path = None
@@ -335,20 +373,22 @@ class FilePicker(ui.dialog):
         if self.allowed_extensions is None:
             return True
         else:
-            return filename.split('.')[-1].lower() in self.allowed_extensions
+            return filename.split(".")[-1].lower() in self.allowed_extensions
 
     def add_drives_toggle(self):
         """Give a list of available drivers in a WinOS computer"""
-        if platform.system() == 'Windows':
-            drives = ['%s:\\' % d for d in string.ascii_uppercase if
-                      os.path.exists('%s:' % d)]
+        if platform.system() == "Windows":
+            drives = [
+                "%s:\\" % d for d in string.ascii_uppercase if os.path.exists("%s:" % d)
+            ]
             if self.path != "" or self.path != ".":
                 select_drive = os.path.splitdrive(self.path)[0] + "\\"
             else:
                 self.path = Path(drives[0]).expanduser()
                 select_drive = drives[0]
-            self.drives_toggle = ui.toggle(drives, value=select_drive,
-                                           on_change=self.__update_drive)
+            self.drives_toggle = ui.toggle(
+                drives, value=select_drive, on_change=self.__update_drive
+            )
 
     def __update_drive(self):
         if self.drives_toggle:
@@ -356,34 +396,43 @@ class FilePicker(ui.dialog):
             self.update_grid()
 
     def update_grid(self) -> None:
-        paths = list(self.path.glob('*'))
+        paths = list(self.path.glob("*"))
         if not self.show_hidden_files:
-            paths = [p for p in paths if not p.name.startswith('.')]
+            paths = [p for p in paths if not p.name.startswith(".")]
         if self.allowed_extensions:
-            paths = [p for p in paths if
-                     p.is_dir() or self.check_extension(p.name)]
+            paths = [p for p in paths if p.is_dir() or self.check_extension(p.name)]
         paths.sort(key=lambda p: p.name.lower())
         paths.sort(key=lambda p: not p.is_dir())
 
-        self.grid.options['rowData'] = [
-            {'name': f'📁 <strong>{p.name}</strong>' if p.is_dir() else p.name,
-             'path': str(p), } for p in paths]
-        if (self.upper_limit is None
-                and self.path != self.path.parent
-                or self.upper_limit is not None
-                and self.path != self.upper_limit):
-            self.grid.options['rowData'].insert(0, {
-                'name': '📁 <strong>..</strong>',
-                'path': str(self.path.parent), })
+        self.grid.options["rowData"] = [
+            {
+                "name": f"📁 <strong>{p.name}</strong>" if p.is_dir() else p.name,
+                "path": str(p),
+            }
+            for p in paths
+        ]
+        if (
+            self.upper_limit is None
+            and self.path != self.path.parent
+            or self.upper_limit is not None
+            and self.path != self.upper_limit
+        ):
+            self.grid.options["rowData"].insert(
+                0,
+                {
+                    "name": "📁 <strong>..</strong>",
+                    "path": str(self.path.parent),
+                },
+            )
         self.grid.update()
 
     def handle_single_click(self, e: GenericEventArguments) -> None:
         """Remember the row a single click landed on (for the 'Ok' button)."""
-        self.selected_path = Path(e.args['data']['path'])
+        self.selected_path = Path(e.args["data"]["path"])
 
     def handle_double_click(self, e: GenericEventArguments) -> None:
         """Open a folder, or pick a file, on double click."""
-        self.path = Path(e.args['data']['path'])
+        self.path = Path(e.args["data"]["path"])
         if self.path.is_dir():
             self.selected_path = None
             self.update_grid()
@@ -405,8 +454,9 @@ class FilePicker(ui.dialog):
             self.submit(str(selected))
         else:
             exts = ", ".join("." + e for e in (self.allowed_extensions or []))
-            ui.notify("Please select a file with the extension: "
-                      + (exts or "(any)") + "!")
+            ui.notify(
+                "Please select a file with the extension: " + (exts or "(any)") + "!"
+            )
 
 
 class FileSaver(ui.dialog):
@@ -441,9 +491,15 @@ class FileSaver(ui.dialog):
     create_folder(folder_name: str, dialog: ui.dialog)
         Create a new folder with the specified name.
     """
-    def __init__(self, directory: str, *, upper_limit: Optional[str] = None,
-                 show_hidden_files: bool = False,
-                 title: Optional[str] = 'File name') -> None:
+
+    def __init__(
+        self,
+        directory: str,
+        *,
+        upper_limit: Optional[str] = None,
+        show_hidden_files: bool = False,
+        title: Optional[str] = "File name",
+    ) -> None:
         super().__init__()
         self.show_hidden_files = show_hidden_files
         self.drives_toggle = None
@@ -453,37 +509,50 @@ class FileSaver(ui.dialog):
             self.upper_limit = None
         else:
             self.upper_limit = Path(
-                directory if upper_limit is ... else upper_limit).expanduser()
+                directory if upper_limit is ... else upper_limit
+            ).expanduser()
 
         with self, ui.card():
             self.add_drives_toggle()
-            self.grid = ui.aggrid(
-                {'columnDefs': [{'field': 'name', 'headerName': 'File'}],
-                 'rowSelection': 'single'}, html_columns=[0]).classes(
-                'w-96').on('cellDoubleClicked', self.handle_double_click)
+            self.grid = (
+                ui.aggrid(
+                    {
+                        "columnDefs": [{"field": "name", "headerName": "File"}],
+                        "rowSelection": "single",
+                    },
+                    html_columns=[0],
+                )
+                .classes("w-96")
+                .on("cellDoubleClicked", self.handle_double_click)
+            )
             # Input field for filename
-            self.filename_input = ui.input(self.title).classes(
-                'w-full justify-between').on('keydown.enter',
-                                             self.handle_save)
-            with ui.row().classes('w-full justify-between'):
-                ui.button('Create Folder',
-                          on_click=self.create_folder_dialog).props('outline')
-                ui.button('Cancel', on_click=self.close).props('outline')
-                ui.button('Save', on_click=self.handle_save)
+            self.filename_input = (
+                ui.input(self.title)
+                .classes("w-full justify-between")
+                .on("keydown.enter", self.handle_save)
+            )
+            with ui.row().classes("w-full justify-between"):
+                ui.button("Create Folder", on_click=self.create_folder_dialog).props(
+                    "outline"
+                )
+                ui.button("Cancel", on_click=self.close).props("outline")
+                ui.button("Save", on_click=self.handle_save)
         self.update_grid()
 
     def add_drives_toggle(self):
         """Give a list of available drivers in a WinOS computer"""
-        if platform.system() == 'Windows':
-            drives = ['%s:\\' % d for d in string.ascii_uppercase if
-                      os.path.exists('%s:' % d)]
+        if platform.system() == "Windows":
+            drives = [
+                "%s:\\" % d for d in string.ascii_uppercase if os.path.exists("%s:" % d)
+            ]
             if self.path != "" or self.path != ".":
                 select_drive = os.path.splitdrive(self.path)[0] + "\\"
             else:
                 self.path = Path(drives[0]).expanduser()
                 select_drive = drives[0]
-            self.drives_toggle = ui.toggle(drives, value=select_drive,
-                                           on_change=self.__update_drive)
+            self.drives_toggle = ui.toggle(
+                drives, value=select_drive, on_change=self.__update_drive
+            )
 
     def __update_drive(self):
         if self.drives_toggle:
@@ -491,26 +560,32 @@ class FileSaver(ui.dialog):
             self.update_grid()
 
     def update_grid(self) -> None:
-        paths = list(self.path.glob('*'))
+        paths = list(self.path.glob("*"))
         if not self.show_hidden_files:
-            paths = [p for p in paths if not p.name.startswith('.')]
+            paths = [p for p in paths if not p.name.startswith(".")]
         paths.sort(key=lambda p: p.name.lower())
         paths.sort(key=lambda p: not p.is_dir())
 
-        self.grid.options['rowData'] = [
-            {'name': f'📁 <strong>{p.name}</strong>' if p.is_dir() else p.name,
-             'path': str(p)} for p in paths]
-        if (self.upper_limit is None
-                and self.path != self.path.parent
-                or self.upper_limit is not None
-                and self.path != self.upper_limit):
-            self.grid.options['rowData'].insert(0, {
-                'name': '📁 <strong>..</strong>',
-                'path': str(self.path.parent)})
+        self.grid.options["rowData"] = [
+            {
+                "name": f"📁 <strong>{p.name}</strong>" if p.is_dir() else p.name,
+                "path": str(p),
+            }
+            for p in paths
+        ]
+        if (
+            self.upper_limit is None
+            and self.path != self.path.parent
+            or self.upper_limit is not None
+            and self.path != self.upper_limit
+        ):
+            self.grid.options["rowData"].insert(
+                0, {"name": "📁 <strong>..</strong>", "path": str(self.path.parent)}
+            )
         self.grid.update()
 
     def handle_double_click(self, e: GenericEventArguments) -> None:
-        self.path = Path(e.args['data']['path'])
+        self.path = Path(e.args["data"]["path"])
         if self.path.is_dir():
             self.update_grid()
         else:
@@ -520,27 +595,32 @@ class FileSaver(ui.dialog):
     def handle_save(self):
         filename = self.filename_input.value
         if not filename:
-            ui.notify('File name cannot be empty!')
+            ui.notify("File name cannot be empty!")
             return
         save_path = self.path / filename
-        save_path_str = str(save_path).replace('\\', '/')
+        save_path_str = str(save_path).replace("\\", "/")
         self.submit(save_path_str)
 
     async def create_folder_dialog(self):
         """Open a dialog to get the name of the new folder and create it."""
-        with ui.dialog().classes('w-100 h-100') as dialog, ui.card():
+        with ui.dialog().classes("w-100 h-100") as dialog, ui.card():
             with ui.column():
-                folder_name_input = ui.input('Folder Name').classes(
-                    'w-full justify-between')
+                folder_name_input = ui.input("Folder Name").classes(
+                    "w-full justify-between"
+                )
                 with ui.row():
-                    ui.button('Cancel', on_click=dialog.close).props('outline')
-                    ui.button('Create', on_click=lambda: self.create_folder(
-                        folder_name_input.value, dialog))
+                    ui.button("Cancel", on_click=dialog.close).props("outline")
+                    ui.button(
+                        "Create",
+                        on_click=lambda: self.create_folder(
+                            folder_name_input.value, dialog
+                        ),
+                    )
         await dialog
 
     def create_folder(self, folder_name: str, dialog: ui.dialog):
         if not folder_name:
-            ui.notify('Folder name cannot be empty!')
+            ui.notify("Folder name cannot be empty!")
             return
         new_folder_path = self.path / folder_name
         if new_folder_path.exists():
