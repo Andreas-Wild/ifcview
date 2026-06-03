@@ -64,12 +64,14 @@ uv sync
 uv run ifcview --port 8180
 ```
 
+or simply run with your .venv properly activated:
+
+```bash
+python -m ifcview.main 
+```
+
 Then open the printed URL in a browser. Exit with `Ctrl + C`.
 
-## Test data
-
-`make_test_data.py` merges per-sample source files (`C54.h5`, `C55.h5`, ...)
-into a single master `test.h5` for development.
 
 ## Credit & license
 
