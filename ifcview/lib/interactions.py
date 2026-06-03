@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 from nicegui import ui, run
 import ifcview.lib.rendering as re
 import ifcview.lib.utilities as util
-from ifcview.lib.rendering import GuiRendering, FilePicker, FileSaver
+from ifcview.lib.rendering import (
+    GuiRendering, FilePicker, FileSaver, EventIdDialog)
 
 
 class GuiInteraction(GuiRendering):
@@ -50,6 +51,7 @@ class GuiInteraction(GuiRendering):
             lambda e: self.on_experiment_change())
         self.prev_button.on("click", self.browse_prev)
         self.next_button.on("click", self.browse_next)
+        self.load_ids_button.on("click", self.load_event_ids)
         self.channel_select.on("update:model-value",
                                lambda e: self.on_channel_change())
         # Mask overlay: toggling or switching run re-renders. The run dropdown
@@ -361,6 +363,49 @@ class GuiInteraction(GuiRendering):
                 < len(self.browse_cells):
             self.browse_page += 1
             self.render_browse_page()
+
+    async def load_event_ids(self):
+        """Load a population of event ids (pasted or from a .txt) to browse.
+
+        Opens the combined paste/upload dialog and renders the resolved events
+        into the Quick Cell View list, replacing the auto-scanned cells. The
+        population is tied to the current experiment; switching experiments
+        re-runs the scan (see ``on_experiment_change``) and overwrites it.
+        """
+        file_path = self.file_path_display.text
+        experiment = self.experiment_select.value
+        if not file_path or not experiment:
+            ui.notify("Select a file and experiment first.")
+            return
+        text = await EventIdDialog()
+        if not text or not str(text).strip():
+            return
+        await self._apply_event_id_text(text)
+
+    async def _apply_event_id_text(self, text):
+        """Resolve free-text event ids and show them in the browse list."""
+        file_path = self.file_path_display.text
+        experiment = self.experiment_select.value
+        with self.loading_overlay("Loading event IDs…"):
+            try:
+                await self.client.connected()
+            except Exception:
+                pass
+            found, missing = await run.cpu_bound(
+                util.resolve_event_ids, file_path, experiment, text)
+        if self.experiment_select.value != experiment:
+            return  # selection changed mid-read; a newer task owns the UI
+        self.browse_cells = found
+        self.browse_page = 0
+        self.render_browse_page()
+        if found:
+            message = "Loaded {} events".format(len(found))
+            if missing:
+                message += ", {} not found".format(len(missing))
+            ui.notify(message)
+            self.open_key(util.event_key(experiment, found[0]))
+        else:
+            ui.notify("No matching events found in {}.".format(experiment))
 
     def handle_key(self, e):
         """Map arrow keys to image/channel cycling.

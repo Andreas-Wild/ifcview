@@ -41,6 +41,7 @@ RATIO = 0.65  # Ratio for adjusting size between image/plot and screen
 MAX_FIG_SIZE = [12.0, 9.0]
 MAX_PLOT_SIZE = [9.0, 7.0]
 INPUT_EXT = ["hdf", "nxs", "h5", "hdf5"]
+EVENT_ID_EXT = ["txt"]  # event-id population lists (comma/whitespace separated)
 HEADER_COLOR = "#3874c8"
 HEADER_TITLE = "IMAGING FLOW CYTOMETRY HDF5 VIEWER"
 LEFT_DRAWER_COLOR = "#d7e3f4"
@@ -186,6 +187,11 @@ class GuiRendering:
                 self.browse_panel = ui.column().classes("w-full")
                 with self.browse_panel:
                     ui.label("Quick Cell View").style(FONT_STYLE)
+                    # Load a population of event ids (pasted or from a .txt) into
+                    # the browse list below; one dialog handles both inputs.
+                    self.load_ids_button = ui.button("Load event IDs").props(
+                        "icon=upload outline"
+                    )
                     self.browse_info = ui.label("")
                     self.browse_container = (
                         ui.list().props("dense bordered").classes("w-full")
@@ -641,3 +647,42 @@ class FileSaver(ui.dialog):
         new_folder_path.mkdir(parents=True, exist_ok=True)
         self.update_grid()
         dialog.close()
+
+
+class EventIdDialog(ui.dialog):
+    """Dialog to supply a population of event ids, by pasting or file upload.
+
+    Both inputs feed a single textarea (the source of truth the dialog submits):
+    pasting types straight into it, and uploading a ``.txt`` reads the file's
+    bytes (browser-side, so it works even when the UI is viewed from another
+    machine) and drops the contents in. Awaiting the dialog returns the textarea
+    text, or ``None`` if cancelled.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        with self, ui.card().classes("w-96"):
+            ui.label("Load event IDs").style(FONT_STYLE)
+            self.ids_textarea = ui.textarea(
+                "Paste event IDs (comma- or space-separated)"
+            ).classes("w-full")
+            ui.upload(
+                label="Upload .txt",
+                auto_upload=True,
+                on_upload=self._handle_upload,
+            ).props("accept=.txt flat").classes("w-full")
+            with ui.row().classes("w-full justify-end"):
+                ui.button("Cancel", on_click=self.close).props("outline")
+                ui.button("Show events", on_click=self._submit)
+
+    def _handle_upload(self, e) -> None:
+        """Read the uploaded file's bytes into the textarea."""
+        try:
+            text = e.content.read().decode("utf-8", errors="ignore")
+        except Exception:
+            ui.notify("Could not read the uploaded file.")
+            return
+        self.ids_textarea.set_value(text)
+
+    def _submit(self) -> None:
+        self.submit(self.ids_textarea.value)

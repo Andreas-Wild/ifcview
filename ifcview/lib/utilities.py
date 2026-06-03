@@ -275,6 +275,52 @@ def resolve_dataset_key(hdf_file, experiment, event_id):
     return None
 
 
+def resolve_event_ids(hdf_file, experiment, ids_text):
+    """Resolve a batch of user-supplied event ids against an experiment.
+
+    ``ids_text`` is free text holding event ids separated by commas and/or
+    whitespace/newlines (e.g. a pasted list or the contents of an exported
+    ``.txt`` file). The file is opened ONCE for the whole batch (rather than
+    once per id as ``resolve_dataset_key`` would), and each token is resolved
+    with the same zero-padding-tolerant, O(1) link-existence checks via
+    ``__event_id_candidates``.
+
+    Input order is preserved and duplicates are dropped, so the result can be
+    dropped straight into the browse list (see ``event_key`` / the Quick Cell
+    View). Returns ``(found_names, missing_ids)`` where ``found_names`` are the
+    matched stored names (usable with :func:`event_key`) and ``missing_ids`` are
+    the tokens with no matching dataset. On a read error both lists are empty.
+    """
+    tokens = []
+    for chunk in str(ids_text).replace(",", " ").split():
+        token = chunk.strip()
+        if token:
+            tokens.append(token)
+    found, missing, seen = [], [], set()
+    try:
+        with h5py.File(hdf_file, 'r') as f:
+            events_path = _join(experiment, "events")
+            if events_path not in f:
+                return [], tokens
+            group = f[events_path]
+            for token in tokens:
+                if token in seen:
+                    continue
+                seen.add(token)
+                match = None
+                for candidate in __event_id_candidates(token):
+                    if candidate in group:
+                        match = candidate
+                        break
+                if match is None:
+                    missing.append(token)
+                else:
+                    found.append(match)
+    except Exception:
+        return [], []
+    return found, missing
+
+
 def _parse_json_attr(value):
     """Parse an HDF5 attribute that stores a JSON list (e.g. channel_names).
 
