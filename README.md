@@ -9,15 +9,28 @@ consolidated into a single HDF5 "master" file, without ever enumerating the
 
 ## Data model
 
-The viewer expects a master `.h5` file where:
+An **experiment** is any group that contains an `events` subgroup. Two file
+layouts are supported and detected automatically:
 
-- each **top-level group** is an experiment / sample (e.g. `/C54`, `/C55`);
-- each **dataset** is one event, named by its integer id (`"0"`, `"1"`, ...);
-- each event is a `(channels, height, width)` `uint16` stack — the channel is a
-  layer along axis 0, selected at display time;
-- per-experiment metadata (`channel_names`, `physical_channels`,
-  `kept_channels`, ...) lives in the group's HDF5 attributes and drives the
-  channel labels and per-channel colormaps.
+- a **single-experiment file**, where the file root itself holds `events` (and,
+  optionally, `masks`); the dropdown shows one entry, labelled with the file
+  stem;
+- a **master file**, where each top-level group (e.g. `/C54`, `/C55`) is an
+  experiment holding its own `events`/`masks` subgroups.
+
+Within an experiment:
+
+- `events/<id>` is one event, named by its integer id (`"0"`, `"1"`, ...), stored
+  as a `(channels, height, width)` `uint16` stack — the channel is a layer along
+  axis 0, selected at display time;
+- `masks/<run>/<id>` (optional) is the matching instance mask for that event: a
+  `(height, width)` integer label image where `0` is background and `1..N` are
+  distinct instances, with one mask per event (1:1). Multiple mask **runs**
+  (e.g. `cyto3_best`) can coexist as sibling subgroups;
+- experiment metadata (`channel_names`, `physical_channels`, `kept_channels`,
+  ...) lives in the experiment group's HDF5 attributes — the **file root** attrs
+  for a single-experiment file — and drives the channel labels and per-channel
+  colormaps.
 
 ## Features
 
@@ -27,7 +40,12 @@ The viewer expects a master `.h5` file where:
 - Look up any event directly by id, or click a browsed cell to display it.
 - Per-channel display: pick a channel, auto colormap, adjustable contrast, plus
   an image-information tab (histogram + statistics).
-- Save the displayed image to `.tif`, `.jpg`, or `.png`.
+- **Mask overlay**: toggle a coloured instance-mask overlay (distinct colour per
+  instance, translucent) on top of the displayed image, with a mask-run dropdown
+  when several runs are available. It is a direct per-event lookup, so it does
+  not affect browsing performance.
+- Save the current view (image + colormap + contrast + any mask overlay, exactly
+  as shown) to `.tif`, `.jpg`, or `.png`.
 - Reads compressed datasets via [hdf5plugin](https://pypi.org/project/hdf5plugin/).
 
 ## Install

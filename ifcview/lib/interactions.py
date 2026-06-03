@@ -52,11 +52,20 @@ class GuiInteraction(GuiRendering):
         self.next_button.on("click", self.browse_next)
         self.channel_select.on("update:model-value",
                                lambda e: self.on_channel_change())
+        # Mask overlay: toggling or switching run re-renders. The run dropdown
+        # is always shown alongside the toggle but is interactive only while the
+        # overlay is on; show_data diffs both values (see its state tuple) so the
+        # change reaches display_image.
+        self.mask_toggle.on("update:model-value",
+                            lambda e: self.on_mask_toggle())
         # Arrow keys: left/right cycle through the browsed images, up/down
         # cycle through the channel layers. The keyboard ignores typing in
         # inputs/selects so the event-id field still works normally.
         self.keyboard = ui.keyboard(on_key=self.handle_key)
         self.current_state, self.image, self.image_norm = None, None, None
+        # Coloured RGBA overlay for the currently displayed event (or None when
+        # the overlay is off / unavailable); reused by the saved view.
+        self.mask = None
         self.timer = ui.timer(re.UPDATE_RATE, lambda: self.show_data())
         self.selected_tab = 1
         self.last_folder = ""
@@ -111,12 +120,13 @@ class GuiInteraction(GuiRendering):
         here is left uncovered as it returns near-instantly.
         """
         file_path = file_path.replace("\\", "/")
-        groups = await run.cpu_bound(util.list_top_level_groups, file_path)
-        if isinstance(groups, str):
-            ui.notify("Error reading file: " + groups)
+        experiments = await run.cpu_bound(util.list_experiments, file_path)
+        if isinstance(experiments, str):
+            ui.notify("Error reading file: " + experiments)
             return
-        if not groups:
-            ui.notify("No top-level groups (experiments) found in the file.")
+        if not experiments:
+            ui.notify("No experiments (groups containing an 'events' group) "
+                      "found in the file.")
             return
         self.reset()
         self.file_path_display.set_text(file_path)
@@ -128,8 +138,8 @@ class GuiInteraction(GuiRendering):
         # de-dup marker and clear the value first so the scan still fires when
         # the same experiment name is selected again (e.g. reopening a file).
         self._last_scanned_experiment = None
-        self.experiment_select.set_options(groups, value=None)
-        self.experiment_select.set_value(groups[0])
+        self.experiment_select.set_options(experiments, value=None)
+        self.experiment_select.set_value(next(iter(experiments)))
 
     @contextmanager
     def loading_overlay(self, message):
@@ -164,6 +174,8 @@ class GuiInteraction(GuiRendering):
         self.file_path_display.set_text("")
         self.experiment_select.set_options([])
         self.channel_select.set_options({})
+        self.mask_run_select.set_options({})
+        self.mask_toggle.set_value(False)
         self.channel_labels = []
         self.browse_container.clear()
         self.browse_info.set_text("")
@@ -206,6 +218,7 @@ class GuiInteraction(GuiRendering):
                 pass
             try:
                 await self.refresh_channels()
+                await self.refresh_mask_runs()
                 await self.scan_browse()
             except Exception as error:
                 self.browse_cells = []
@@ -241,6 +254,48 @@ class GuiInteraction(GuiRendering):
         label = self.channel_labels[idx] if idx < len(self.channel_labels) \
             else ""
         self.cmap_list.set_value(util.channel_colormap(label, idx))
+
+    def on_mask_toggle(self):
+        """Enable/disable the run dropdown when the overlay toggle changes.
+
+        The actual re-render is driven by ``show_data`` (the toggle value is
+        part of its diffed state), so this only manages the run dropdown's
+        interactivity.
+        """
+        self.update_mask_run_interactivity()
+
+    def update_mask_run_interactivity(self):
+        """Make the mask-run dropdown interactive only while the overlay is on.
+
+        The dropdown stays visible alongside the toggle (its visibility is owned
+        by ``enable_ui_image``); here we only enable it when the overlay is on
+        and disable it otherwise.
+        """
+        if self.mask_toggle.value:
+            self.mask_run_select.enable()
+        else:
+            self.mask_run_select.disable()
+
+    async def refresh_mask_runs(self):
+        """Populate the mask-run dropdown for the selected experiment.
+
+        Lists the run subgroups under the experiment's ``masks`` group and
+        selects the first by default. When none exist the toggle is reset off.
+        The toggle/dropdown visibility is owned by ``enable_ui_image`` (shown
+        only while an image with available masks is displayed).
+        """
+        file_path = self.file_path_display.text
+        experiment = self.experiment_select.value
+        if not file_path or not experiment:
+            return
+        runs = await run.cpu_bound(util.list_mask_runs, file_path, experiment)
+        if self.experiment_select.value != experiment:
+            return  # selection changed mid-read; a newer task owns the UI
+        if runs:
+            self.mask_run_select.set_options(runs, value=runs[0])
+        else:
+            self.mask_run_select.set_options({})
+            self.mask_toggle.set_value(False)
 
     async def scan_browse(self):
         """Scan the current experiment ONCE for cells and cache them.
@@ -278,7 +333,7 @@ class GuiInteraction(GuiRendering):
         self.browse_container.clear()
         with self.browse_container:
             for name in page_names:
-                key = f"{experiment}/{name}"
+                key = util.event_key(experiment, name)
                 ui.item(name, on_click=lambda k=key: self.open_key(k))
         if page_names:
             self.browse_info.set_text(f"Page {self.browse_page + 1}")
@@ -330,14 +385,14 @@ class GuiInteraction(GuiRendering):
         if not cells:
             return
         experiment = self.experiment_select.value
-        prefix = "{}/".format(experiment)
+        # The displayed key ends in the event id (e.g. ".../events/42").
         key = self.hdf_key_display.text
-        name = key[len(prefix):] if key.startswith(prefix) else ""
+        name = key.rsplit("/", 1)[-1] if key else ""
         if name in cells:
             idx = (cells.index(name) + delta) % len(cells)
         else:
             idx = 0
-        self.open_key("{}/{}".format(experiment, cells[idx]))
+        self.open_key(util.event_key(experiment, cells[idx]))
 
     def cycle_channel(self, delta):
         """Select the channel layer ``delta`` steps away (wraps around)."""
@@ -389,6 +444,16 @@ class GuiInteraction(GuiRendering):
         self.save_image_button.enable()
         self.histogram_plot.set_visibility(True)
         self.image_info_table.set_visibility(True)
+        # The mask overlay toggle and its run dropdown are shown together
+        # whenever an image is displayed and the experiment has at least one
+        # mask run. (reset() hides them while no image is shown, so their
+        # visibility has to be re-asserted here.) The run dropdown stays visible
+        # regardless of the toggle but is only interactive when the overlay is
+        # on.
+        has_runs = bool(self.mask_run_select.options)
+        self.mask_toggle.set_visibility(has_runs)
+        self.mask_run_select.set_visibility(has_runs)
+        self.update_mask_run_interactivity()
 
     def reset(self, keep_display=False):
         """Reset status of UI-elements"""
@@ -399,8 +464,10 @@ class GuiInteraction(GuiRendering):
         self.cmap_list.value = re.CMAP_LIST[0]
         self.cmap_list.disable()
         self.channel_select.set_visibility(False)
+        self.mask_toggle.set_visibility(False)
+        self.mask_run_select.set_visibility(False)
         self.disable_sliders()
-        self.image, self.image_norm = None, None
+        self.image, self.image_norm, self.mask = None, None, None
         self.main_plot.set_visibility(True)
         self.save_image_button.disable()
         self.histogram_plot.set_visibility(False)
@@ -451,11 +518,33 @@ class GuiInteraction(GuiRendering):
         else:
             self.image_norm = np.copy(self.image)
 
+        # Read the matching instance mask (same id, selected run) when the
+        # overlay is on. Navigating by the open dataset object keeps this a
+        # single O(1) lookup and works for both file layouts:
+        #   data_obj            -> the event dataset (".../events/<id>")
+        #   .parent             -> the events group
+        #   .parent.parent      -> the experiment group (file root for a
+        #                          single-experiment file)
+        self.mask = None
+        if self.mask_toggle.value and self.mask_run_select.value:
+            try:
+                experiment_group = data_obj.parent.parent
+                masks_group = experiment_group.get("masks")
+                run = self.mask_run_select.value
+                name = data_obj.name.rsplit("/", 1)[-1]
+                if masks_group is not None and run in masks_group \
+                        and name in masks_group[run]:
+                    self.mask = masks_group[run][name][()]
+            except Exception:
+                self.mask = None
+
         self.fig = self.main_plot.figure
         self.fig.clf()
         self.fig.set_dpi(self.dpi)
         self.ax = self.fig.gca()
         self.ax.imshow(self.image_norm, cmap=self.cmap_list.value)
+        if self.mask is not None:
+            self.ax.imshow(util.colorize_mask(self.mask, alpha=re.MASK_ALPHA))
         self.fig.tight_layout()
         self.main_plot.update()
 
@@ -493,7 +582,8 @@ class GuiInteraction(GuiRendering):
             new_state = (file_path1, hdf_key1, self.hdf_value_display.text,
                          self.cmap_list.value, self.min_slider.value,
                          self.max_slider.value, self.selected_tab,
-                         self.channel_select.value)
+                         self.channel_select.value,
+                         self.mask_toggle.value, self.mask_run_select.value)
             if new_state != self.current_state:
                 self.current_state = new_state
                 try:
@@ -529,21 +619,44 @@ class GuiInteraction(GuiRendering):
             self.__clear_plot()
             self.reset(keep_display=True)
 
+    def _compose_current_view(self):
+        """Render exactly what is on screen to an ``(H, W, 3)`` uint8 RGB array.
+
+        Reproduces the displayed view: the contrast-adjusted base image mapped
+        through the active colormap (matplotlib's default min/max scaling, as in
+        ``imshow``), with the coloured mask overlay alpha-composited on top when
+        it is showing. Used by "Save current view" so the file matches the
+        display rather than the raw channel data.
+        """
+        arr = np.asarray(self.image_norm, dtype=np.float64)
+        amin, amax = arr.min(), arr.max()
+        if amax > amin:
+            norm = (arr - amin) / (amax - amin)
+        else:
+            norm = np.zeros_like(arr)
+        rgb = plt.get_cmap(self.cmap_list.value)(norm)[..., :3]
+        if self.mask is not None:
+            rgba = util.colorize_mask(self.mask, alpha=re.MASK_ALPHA)
+            a = rgba[..., 3:4]
+            rgb = rgb * (1.0 - a) + rgba[..., :3] * a
+        return np.clip(rgb * 255.0, 0, 255).astype(np.uint8)
+
     async def save_image(self) -> None:
-        """Save the currently displayed image when 'Save image' is clicked."""
+        """Save the current view (as shown) when 'Save current view' is
+        clicked."""
         if self.last_folder and os.path.exists(self.last_folder):
             start_dir = self.last_folder
         else:
             start_dir = "~"
         file_path = await FileSaver(start_dir,
                                     title="File name (ext: .tif, .jpg, .png)")
-        if not file_path or self.image is None:
+        if not file_path or self.image_norm is None:
             return
         if os.path.splitext(file_path)[-1] not in (".tif", ".jpg", ".png"):
             ui.notify("Please use .tif, .jpg, or .png as file extension!")
             return
         overwriting = os.path.isfile(file_path)
-        error = util.save_image(file_path, self.image)
+        error = util.save_image(file_path, self._compose_current_view())
         if error is not None:
             ui.notify(error)
         elif overwriting:

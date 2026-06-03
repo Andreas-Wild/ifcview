@@ -36,6 +36,7 @@ MAX_BROWSE_PAGES = 5  # pages of cells scanned/cached per experiment (cap)
 CELL_FILTER_CHANNEL = 0  # layer used to judge "is a cell" (0 = brightfield)
 CELL_CONTRAST_THRESHOLD = 0.01  # min std/mean of that layer to count as a cell
 CELL_FILTER_SCAN_LIMIT = 20000  # max events probed per page when filtering
+MASK_ALPHA = 0.45  # opacity of the coloured instance-mask overlay
 RATIO = 0.65  # Ratio for adjusting size between image/plot and screen
 MAX_FIG_SIZE = [12.0, 9.0]
 MAX_PLOT_SIZE = [9.0, 7.0]
@@ -128,6 +129,8 @@ class GuiRendering:
         self.hdf_value_display = None
         self.channel_select = None
         self.cmap_list = None
+        self.mask_toggle = None
+        self.mask_run_select = None
         self.save_image_button = None
         self.main_plot = None
         self.min_slider = None
@@ -217,7 +220,16 @@ class GuiRendering:
                 with ui.row().classes("items-center"):
                     ui.label("Color map: ").style(FONT_STYLE)
                     self.cmap_list = ui.select(CMAP_OPTIONS, value=CMAP_LIST[0])
-                self.save_image_button = ui.button("Save image")
+                # Mask overlay: a toggle plus a (normally hidden) run dropdown
+                # that only appears once masks exist for the experiment.
+                with ui.row().classes("items-center"):
+                    self.mask_toggle = ui.switch("Mask overlay")
+                    self.mask_run_select = ui.select(
+                        options={}, label="Mask run"
+                    ).classes("w-40")
+                self.mask_toggle.set_visibility(False)
+                self.mask_run_select.set_visibility(False)
+                self.save_image_button = ui.button("Save current view")
 
             # Tabs for image visualization and image information
             tabs = ui.tabs().classes("w-full")
@@ -232,10 +244,10 @@ class GuiRendering:
             with self.panel_tabs:
                 # Tab 1 for displaying the image
                 with ui.tab_panel(self.tab_one):
-                    with ui.row().classes("w-full justify-left items-center"):
+                    with ui.row().classes("w-full justify-center items-center"):
                         self.main_plot = ui.matplotlib(
                             figsize=self.fig_size, dpi=self.dpi
-                        )
+                        ).classes("mx-auto")
 
                     # Sliders for adjusting the contrast of an image.
                     with ui.row().classes(

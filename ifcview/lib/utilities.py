@@ -14,6 +14,8 @@ import os
 import json
 import platform
 import tkinter as tk
+from pathlib import Path
+
 import h5py
 import hdf5plugin  # noqa: F401  (registers HDF5 compression plugins on import)
 import numpy as np
@@ -37,12 +39,44 @@ def get_height_width_screen():
     return screen_height, screen_width, dpi
 
 
-def list_top_level_groups(hdf_file):
-    """
-    List the top-level groups (experiments/samples) of an HDF5 file.
+def _join(experiment, *parts):
+    """Build a valid HDF5 key under an experiment, treating root specially.
 
-    Only the first level is read, so this stays cheap even for very large
-    master files. The full file is never walked.
+    The experiment path may be ``"/"`` or ``""`` (the file root is itself the
+    experiment, as in a single-experiment file). In that case the leading
+    experiment component is dropped so the result is a clean relative key
+    (e.g. ``"events/42"`` rather than ``"//events/42"``). For a named
+    experiment it is kept (e.g. ``"C54/events/42"``).
+    """
+    base = "" if experiment in (None, "", "/") else str(experiment).strip("/")
+    pieces = [p for p in (base, *[str(p).strip("/") for p in parts]) if p]
+    return "/".join(pieces)
+
+
+def event_key(experiment, event_id):
+    """Build the full HDF5 key of an event from its experiment and id.
+
+    e.g. ``("/", "42") -> "events/42"`` and ``("C54", "42") ->
+    "C54/events/42"``. Mirrors the layout resolved by
+    :func:`resolve_dataset_key`, but without touching the file (used to build
+    keys for already-known event ids while browsing/cycling).
+    """
+    return _join(experiment, "events", event_id)
+
+
+def list_experiments(hdf_file):
+    """
+    List the experiments in an HDF5 file as an ordered ``{path: label}`` map.
+
+    An *experiment* is any group that contains an ``events`` subgroup. Two
+    layouts are supported, distinguished cheaply (only the first level is read,
+    so this stays fast even on very large files):
+
+    - **single-experiment file** -- the file root holds ``events`` (and usually
+      ``masks``); the one experiment has path ``"/"`` and is labelled with the
+      file's stem;
+    - **master file** -- each top-level group that contains an ``events``
+      subgroup is an experiment (path and label are the group name).
 
     Parameters
     ----------
@@ -51,12 +85,21 @@ def list_top_level_groups(hdf_file):
 
     Returns
     -------
-    list or str
-        A list of top-level group names, or a string describing an error.
+    dict or str
+        Ordered ``{experiment_path: label}`` mapping, or a string describing an
+        error.
     """
     try:
         with h5py.File(hdf_file, 'r') as f:
-            return [k for k in f.keys() if isinstance(f[k], h5py.Group)]
+            if isinstance(f.get("events"), h5py.Group):
+                return {"/": Path(hdf_file).stem}
+            experiments = {}
+            for k in f.keys():
+                item = f[k]
+                if isinstance(item, h5py.Group) and \
+                        isinstance(item.get("events"), h5py.Group):
+                    experiments[k] = k
+            return experiments
     except Exception as error:
         return str(error)
 
@@ -113,7 +156,7 @@ def _layer_is_cell(dset, channel, threshold, max_samples):
     return event_is_cell(layer, threshold)
 
 
-def list_cell_events_page(hdf_file, group_path, start_id=0, count=10,
+def list_cell_events_page(hdf_file, experiment, start_id=0, count=10,
                           channel=0, threshold=0.01, scan_limit=20000,
                           max_samples=32):
     """
@@ -131,8 +174,9 @@ def list_cell_events_page(hdf_file, group_path, start_id=0, count=10,
     ----------
     hdf_file : str
         Path to the HDF5 file.
-    group_path : str
-        Path to the group (an experiment name like ``"C54"``).
+    experiment : str
+        Experiment path (``"/"`` for a single-experiment file, or a group name
+        like ``"C54"``). Events are scanned inside its ``events`` subgroup.
     start_id : int
         Raw event id to start scanning from (the cursor of this page).
     count : int
@@ -155,9 +199,10 @@ def list_cell_events_page(hdf_file, group_path, start_id=0, count=10,
     """
     try:
         with h5py.File(hdf_file, 'r') as f:
-            if group_path not in f:
+            events_path = _join(experiment, "events")
+            if events_path not in f:
                 return [], False, start_id
-            group = f[group_path]
+            group = f[events_path]
             kept = []
             probes = 0
             event_id = max(0, int(start_id))
@@ -213,17 +258,18 @@ def resolve_dataset_key(hdf_file, experiment, event_id):
     Returns
     -------
     str or None
-        The resolved key (e.g. ``"C54/42"``) if a matching dataset exists,
-        otherwise None.
+        The resolved key (e.g. ``"C54/events/42"`` or ``"events/42"``) if a
+        matching dataset exists, otherwise None.
     """
     try:
         with h5py.File(hdf_file, 'r') as f:
-            if experiment not in f:
+            events_path = _join(experiment, "events")
+            if events_path not in f:
                 return None
-            group = f[experiment]
+            group = f[events_path]
             for candidate in __event_id_candidates(event_id):
                 if candidate in group:
-                    return f"{experiment}/{candidate}"
+                    return _join(experiment, "events", candidate)
     except Exception:
         return None
     return None
@@ -295,10 +341,13 @@ def get_channel_labels(hdf_file, experiment):
     """
     try:
         with h5py.File(hdf_file, "r") as f:
-            if experiment not in f:
+            events_path = _join(experiment, "events")
+            if events_path not in f:
                 return []
+            # Metadata lives on the experiment group (the file root for a
+            # single-experiment file); layer count comes from the events.
             grp = f[experiment]
-            n_layers = _probe_n_layers(grp)
+            n_layers = _probe_n_layers(f[events_path])
             names = _parse_json_attr(grp.attrs.get("channel_names"))
             physical = _parse_json_attr(grp.attrs.get("physical_channels"))
             kept = _parse_json_attr(grp.attrs.get("kept_channels"))
@@ -350,6 +399,85 @@ def channel_colormap(label, index=0):
         if token in text:
             return cmap
     return CHANNEL_CMAP_FALLBACK[index % len(CHANNEL_CMAP_FALLBACK)]
+
+
+def list_mask_runs(hdf_file, experiment):
+    """
+    List the available mask-run names for an experiment.
+
+    Masks live in a ``masks`` subgroup sibling to ``events``, and within it each
+    run (e.g. ``"cyto3_best"``) is its own subgroup holding one ``(H, W)`` label
+    image per event id. Only the names of those run subgroups are read, so this
+    is cheap.
+
+    Parameters
+    ----------
+    hdf_file : str
+        Path to the HDF5 file.
+    experiment : str
+        Experiment path (``"/"`` for a single-experiment file, or a group name).
+
+    Returns
+    -------
+    list of str
+        Mask-run names (e.g. ``["cyto3_best"]``), or an empty list if the
+        experiment has no ``masks`` group.
+    """
+    try:
+        with h5py.File(hdf_file, "r") as f:
+            masks_path = _join(experiment, "masks")
+            if masks_path not in f:
+                return []
+            masks_group = f[masks_path]
+            return [k for k in masks_group.keys()
+                    if isinstance(masks_group[k], h5py.Group)]
+    except Exception:
+        return []
+
+
+# Distinct, perceptually-spread colours (tab20-style) for mask instances. Index
+# by ``(label - 1) % len`` so instance 1 is always the first colour. Kept here
+# as plain RGB floats so colouring needs only numpy (no matplotlib import).
+MASK_PALETTE = np.array([
+    [0.12, 0.47, 0.71], [1.00, 0.50, 0.05], [0.17, 0.63, 0.17],
+    [0.84, 0.15, 0.16], [0.58, 0.40, 0.74], [0.55, 0.34, 0.29],
+    [0.89, 0.47, 0.76], [0.50, 0.50, 0.50], [0.74, 0.74, 0.13],
+    [0.09, 0.75, 0.81], [0.68, 0.78, 0.91], [1.00, 0.73, 0.47],
+    [0.60, 0.87, 0.54], [1.00, 0.60, 0.59], [0.77, 0.69, 0.84],
+    [0.77, 0.61, 0.58], [0.97, 0.71, 0.82], [0.78, 0.78, 0.78],
+    [0.86, 0.86, 0.55], [0.62, 0.85, 0.90],
+], dtype=np.float32)
+
+
+def colorize_mask(mask, alpha=0.45):
+    """
+    Turn an integer instance-label mask into an RGBA overlay.
+
+    Background (label 0) is fully transparent; each instance ``L >= 1`` gets a
+    distinct colour from :data:`MASK_PALETTE` (cycled by ``(L - 1) % len``) at
+    the given ``alpha``. The result is ready to draw directly on top of the base
+    image with ``imshow`` (same ``H x W``).
+
+    Parameters
+    ----------
+    mask : ndarray
+        2D array of integer labels (0 = background, 1..N = instances).
+    alpha : float
+        Opacity applied to instance pixels (background stays transparent).
+
+    Returns
+    -------
+    ndarray
+        ``(H, W, 4)`` float32 RGBA array in [0, 1].
+    """
+    mask = np.asarray(mask)
+    rgba = np.zeros(mask.shape + (4,), dtype=np.float32)
+    labels = mask > 0
+    if labels.any():
+        idx = (mask[labels].astype(np.int64) - 1) % len(MASK_PALETTE)
+        rgba[labels, :3] = MASK_PALETTE[idx]
+        rgba[labels, 3] = alpha
+    return rgba
 
 
 def get_hdf_data(file_path, dataset_path):
@@ -451,27 +579,39 @@ def format_statistical_info(image):
 
 def save_image(file_path, mat):
     """
-    Save a 2D array as an image file.
+    Save an image to a file.
+
+    Two inputs are supported:
+
+    - an ``(H, W, 3)`` uint8 RGB array -- already a rendered "current view"
+      (colormap + contrast + any mask overlay composited); written as-is for
+      every extension so the file matches what is shown on screen;
+    - a 2D array (legacy/fallback) -- normalised to 8-bit for ``.png``/``.jpg``
+      and saved as float32 for ``.tif``.
 
     Parameters
     ----------
     file_path : str
         Path where the image will be saved.
     mat : ndarray
-        2D array to be saved as an image.
+        RGB view (``H, W, 3``) or a 2D array.
 
     Returns
     -------
     None or str
         Returns None if successful, or a string message if an error occurs.
     """
-    file_ext = os.path.splitext(file_path)[-1]
-    if not ((file_ext == ".tif") or (file_ext == ".tiff")):
-        mat = np.uint8(
-            255.0 * (mat - np.min(mat)) / (np.max(mat) - np.min(mat)))
+    if mat.ndim == 3:
+        if mat.dtype != np.uint8:
+            mat = np.clip(mat, 0, 255).astype(np.uint8)
     else:
-        if mat.dtype != np.float32:
-            mat = mat.astype(np.float32)
+        file_ext = os.path.splitext(file_path)[-1]
+        if not ((file_ext == ".tif") or (file_ext == ".tiff")):
+            mat = np.uint8(
+                255.0 * (mat - np.min(mat)) / (np.max(mat) - np.min(mat)))
+        else:
+            if mat.dtype != np.float32:
+                mat = mat.astype(np.float32)
     image = Image.fromarray(mat)
     try:
         image.save(file_path)
