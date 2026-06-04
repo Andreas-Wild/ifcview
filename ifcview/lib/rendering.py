@@ -675,10 +675,11 @@ class EventIdDialog(ui.dialog):
                 ui.button("Cancel", on_click=self.close).props("outline")
                 ui.button("Show events", on_click=self._submit)
 
-    def _handle_upload(self, e) -> None:
+    async def _handle_upload(self, e) -> None:
         """Read the uploaded file's bytes into the textarea."""
         try:
-            text = e.content.read().decode("utf-8", errors="ignore")
+            data = await e.file.read()
+            text = data.decode("utf-8", errors="ignore")
         except Exception:
             ui.notify("Could not read the uploaded file.")
             return
